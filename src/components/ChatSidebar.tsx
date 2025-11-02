@@ -17,6 +17,8 @@ interface ChatSidebarProps {
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onOpenSettings: () => void;
+  // optional className to allow responsive wrappers (e.g. hidden on mobile)
+  className?: string;
 }
 
 export const ChatSidebar = ({
@@ -26,9 +28,15 @@ export const ChatSidebar = ({
   onSelectConversation,
   onDeleteConversation,
   onOpenSettings,
+  className,
 }: ChatSidebarProps) => {
   return (
-    <div className="flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar-background">
+    <div
+      className={cn(
+        "flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar-background",
+        className
+      )}
+    >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-sidebar-border p-4">
         <h1 className="text-lg font-bold text-sidebar-foreground">CHADGPT</h1>

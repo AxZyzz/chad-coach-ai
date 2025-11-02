@@ -6,6 +6,11 @@ import { OnboardingFlow, UserProfile } from "@/components/OnboardingFlow";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { useChatAPI } from "@/hooks/use-chat-api";
+import { useAuth } from "@/hooks/use-auth";
+import { supabase } from "@/lib/supabase";
+import { supabaseAnonKey } from "@/lib/supabase";
+import { Auth } from "@/components/Auth";
 
 interface Message {
   id: string;
@@ -23,58 +28,163 @@ interface Conversation {
 }
 
 const Index = () => {
+  // Core hooks - always present
   const { toast } = useToast();
+  const { isAuthenticated, isLoading: authLoading, setIsAuthenticated } = useAuth();
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [webhookUrl, setWebhookUrl] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  
+  // Chat API hook
+  const { sendMessage, isLoading: chatLoading } = useChatAPI({ 
+    profile: userProfile || { 
+      ai_tone: 'tough', 
+      ai_intensity: 70,
+      ai_goal: 'Stay focused and build discipline'
+    },
+  });
 
-  // Load data from localStorage on mount
+  // Effect for loading user data when authenticated
   useEffect(() => {
-    const savedProfile = localStorage.getItem("chadgpt-profile");
-    const savedWebhook = localStorage.getItem("chadgpt-webhook");
-    const savedConversations = localStorage.getItem("chadgpt-conversations");
+    if (isAuthenticated) {
+      const loadUserData = async () => {
+        try {
+          const savedProfile = localStorage.getItem("chadgpt-profile");
+          const savedConversations = localStorage.getItem("chadgpt-conversations");
 
-    if (savedProfile) {
-      setUserProfile(JSON.parse(savedProfile));
-      setHasCompletedOnboarding(true);
+          if (savedProfile) {
+            setUserProfile(JSON.parse(savedProfile));
+            setHasCompletedOnboarding(true);
+          }
+          if (savedConversations) {
+            const parsed = JSON.parse(savedConversations);
+            setConversations(parsed);
+            if (parsed.length > 0) {
+              setActiveConversationId(parsed[0].id);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading user data:', error);
+        }
+      };
+
+      loadUserData();
     }
-    if (savedWebhook) {
-      setWebhookUrl(savedWebhook);
-    }
-    if (savedConversations) {
-      const parsed = JSON.parse(savedConversations);
-      setConversations(parsed);
-      if (parsed.length > 0) {
-        setActiveConversationId(parsed[0].id);
+  }, [isAuthenticated]);
+
+  // Effect for auth state changes
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUserProfile(null);
+        setHasCompletedOnboarding(false);
+        localStorage.removeItem("chadgpt-profile");
+        localStorage.removeItem("chadgpt-conversations");
       }
-    }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const handleOnboardingComplete = (profile: UserProfile) => {
-    setUserProfile(profile);
-    setHasCompletedOnboarding(true);
-    localStorage.setItem("chadgpt-profile", JSON.stringify(profile));
-    
-    // Create initial conversation
-    const newConversation: Conversation = {
-      id: Date.now().toString(),
-      title: "New Chat",
-      lastMessage: "Ready to start?",
-      timestamp: new Date().toISOString(),
-      messages: [],
-    };
-    setConversations([newConversation]);
-    setActiveConversationId(newConversation.id);
-    localStorage.setItem("chadgpt-conversations", JSON.stringify([newConversation]));
+  // Early returns for auth states
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <div className="text-foreground text-lg">Loading...</div>
+      </div>
+    );
+  }
 
-    toast({
-      title: "Welcome to CHADGPT",
-      description: "Let's get to work. No excuses.",
-    });
+  if (!isAuthenticated) {
+    return <Auth onAuthComplete={() => setIsAuthenticated(true)} />;
+  }
+
+  const handleAuthComplete = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleOnboardingComplete = async (profile: UserProfile) => {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) throw new Error('No user found');
+
+      // First save locally to ensure UI updates
+      setUserProfile(profile);
+      setHasCompletedOnboarding(true);
+      localStorage.setItem("chadgpt-profile", JSON.stringify(profile));
+
+      // Create initial conversation
+      const newConversation: Conversation = {
+        id: Date.now().toString(),
+        title: "New Chat",
+        lastMessage: "Ready to start?",
+        timestamp: new Date().toISOString(),
+        messages: [],
+      };
+      setConversations([newConversation]);
+      setActiveConversationId(newConversation.id);
+      localStorage.setItem("chadgpt-conversations", JSON.stringify([newConversation]));
+
+      // Debug log the profile data being sent
+      console.log('Saving profile to Supabase:', {
+        ...profile,
+        id: user.id,
+        username: user.email,
+        updated_at: new Date().toISOString()
+      });
+
+      // Then try to save to Supabase
+      const { data, error } = await supabase
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          email: user.email,
+          ai_goal: profile.ai_goal,
+          ai_tone: profile.ai_tone,
+          ai_intensity: profile.ai_intensity,
+          updated_at: new Date().toISOString()
+        }, { 
+          onConflict: 'id'
+        });
+
+      if (error) {
+        // Log detailed error information
+        console.error('Supabase error:', {
+          error,
+          errorMessage: error.message,
+          details: error.details,
+          hint: error.hint
+        });
+        // Don't throw here - we already saved locally
+        toast({
+          title: "Warning",
+          description: `Profile sync failed: ${error.message}. Data saved locally.`,
+          variant: "default",
+        });
+        return;
+      }
+
+      console.log('Profile saved successfully:', data);
+
+      toast({
+        title: "Welcome to CHADGPT",
+        description: "Let's get to work. No excuses.",
+      });
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save profile. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleNewChat = () => {
@@ -100,32 +210,9 @@ const Index = () => {
     localStorage.setItem("chadgpt-conversations", JSON.stringify(updated));
   };
 
-  const sendToWebhook = async (data: any) => {
-    if (!webhookUrl) {
-      console.log("No webhook URL configured");
-      return;
-    }
-
-    try {
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        mode: "no-cors",
-        body: JSON.stringify(data),
-      });
-      console.log("Data sent to webhook successfully");
-    } catch (error) {
-      console.error("Error sending to webhook:", error);
-    }
-  };
-
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !userProfile) return;
-
-    setIsLoading(true);
-
+    
     // Create user message
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -149,22 +236,56 @@ const Index = () => {
 
     setConversations(updatedConversations);
 
-    // Send to webhook
-    await sendToWebhook({
-      type: "user_message",
-      message: content,
-      profile: userProfile,
-      conversationId: activeConversationId,
-      timestamp: new Date().toISOString(),
-    });
+      // Send message to voice chat endpoint
+      try {
+        const session = await supabase.auth.getSession();
+        const accessToken = session.data.session?.access_token;
+        
+        if (!accessToken) {
+          console.error('No access token available');
+          return;
+        }
 
-    // Simulate AI response (replace with actual webhook response handling)
-    setTimeout(() => {
-      const responseContent = generateMockResponse(content, userProfile);
+        // Format message for voice API
+        const formattedMessage = {
+          message: content,
+          profile: {
+            tone: userProfile.ai_tone,
+            intensity: userProfile.ai_intensity,
+            goal: userProfile.ai_goal
+          },
+          model: 'gemini-pro', // Specify the model explicitly
+          responseType: 'text'  // Specify response type
+        };
+
+        const response = await fetch('https://yiogftbgycgilipzwnkv.supabase.co/functions/v1/chat-voice', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Apikey': supabaseAnonKey,
+            'Authorization': `Bearer ${accessToken}`
+          },
+          body: JSON.stringify(formattedMessage)
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Voice chat request failed:', errorText);
+          // Don't throw error to prevent breaking chat flow
+        }
+      } catch (error) {
+        console.error('Error sending voice chat request:', error);
+        // Don't throw error to prevent breaking chat flow
+      }    try {
+      if (!activeConversationId) throw new Error('No active conversation');
+      
+      // Get response from chat API
+      const response = await sendMessage(content, activeConversationId);
+      
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: responseContent,
+        content: response.content,
         timestamp: new Date().toLocaleTimeString(),
       };
 
@@ -173,7 +294,7 @@ const Index = () => {
           return {
             ...conv,
             messages: [...conv.messages, assistantMessage],
-            lastMessage: responseContent.slice(0, 50),
+            lastMessage: response.content.slice(0, 50),
           };
         }
         return conv;
@@ -181,94 +302,119 @@ const Index = () => {
 
       setConversations(withResponse);
       localStorage.setItem("chadgpt-conversations", JSON.stringify(withResponse));
-      setIsLoading(false);
-
-      // Send AI response to webhook
-      sendToWebhook({
-        type: "assistant_message",
-        message: responseContent,
-        profile: userProfile,
-        conversationId: activeConversationId,
-        timestamp: new Date().toISOString(),
+    } catch (error) {
+      console.error('Failed to get chat response:', error);
+      toast({
+        title: "Error",
+        description: "Failed to get response. Please try again.",
       });
-    }, 1500);
+    }
   };
 
-  const generateMockResponse = (userMessage: string, profile: UserProfile): string => {
-    const lowerMessage = userMessage.toLowerCase();
-    
-    // Safety check for concerning messages
-    if (lowerMessage.includes("suicide") || lowerMessage.includes("kill myself") || lowerMessage.includes("end it all")) {
-      return "Hey, I'm here to push you, but I care about you. If you're having thoughts of harming yourself, please reach out to a mental health professional or call a helpline. Your life matters.";
-    }
 
-    // Tone-based responses
-    if (profile.tone === "tough") {
-      if (lowerMessage.includes("tired") || lowerMessage.includes("lazy")) {
-        return "You already know that's not okay. One wasted day becomes a week. Pick one thing and finish it before bed. No pity, just action.";
-      }
-      if (lowerMessage.includes("give up") || lowerMessage.includes("quit")) {
-        return "Quitting is easy. That's why most people do it. You said you wanted results. Results don't come from giving up—they come from pushing through when it's hard.";
-      }
-      return "Stop making excuses. You know what needs to be done. Do it now, not tomorrow.";
-    }
-
-    if (profile.tone === "stoic") {
-      if (lowerMessage.includes("tired") || lowerMessage.includes("lazy")) {
-        return "Rest isn't bad, but you've been resting from work you haven't done yet. Earn your rest tomorrow.";
-      }
-      return "The obstacle in the path becomes the path. What you resist today shapes who you become tomorrow.";
-    }
-
-    if (profile.tone === "bro") {
-      if (lowerMessage.includes("tired") || lowerMessage.includes("lazy")) {
-        return "Bro, come on. You're better than this. Just do one thing—literally anything productive. Then we can talk.";
-      }
-      return "Alright, real talk—you got this, but you gotta actually do it. Stop thinking, start moving. Let's go.";
-    }
-
-    return "Let's focus on your goals. What's one thing you can do right now to move forward?";
-  };
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
+  // Show loading state while checking authentication
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
+      </div>
+    );
+  }
+
+  // Show authentication if not authenticated
+  if (!isAuthenticated) {
+    return <Auth onAuthComplete={() => null} />;
+  }
+
+  // Show onboarding if authenticated but not completed onboarding
   if (!hasCompletedOnboarding) {
     return <OnboardingFlow onComplete={handleOnboardingComplete} />;
   }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Sidebar */}
-      <ChatSidebar
-        conversations={conversations}
-        activeConversationId={activeConversationId || undefined}
-        onNewChat={handleNewChat}
-        onSelectConversation={setActiveConversationId}
-        onDeleteConversation={handleDeleteConversation}
-        onOpenSettings={() => setShowSettings(true)}
-      />
+      {/* Sidebar for desktop */}
+      <div className="hidden md:block">
+        <ChatSidebar
+          conversations={conversations}
+          activeConversationId={activeConversationId || undefined}
+          onNewChat={handleNewChat}
+          onSelectConversation={setActiveConversationId}
+          onDeleteConversation={handleDeleteConversation}
+          onOpenSettings={() => setShowSettings(true)}
+        />
+      </div>
+
+      {/* Mobile: header with toggle */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-50 border-b border-border bg-card px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              aria-label="Open sidebar"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-sidebar-accent text-sidebar-foreground"
+              onClick={() => setShowSettings(true)}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {/* simple hamburger icon */}
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <h1 className="text-lg font-bold text-foreground">CHADGPT</h1>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            {userProfile?.ai_tone === "tough" && "Tough"}
+            {userProfile?.ai_tone === "stoic" && "Stoic"}
+            {userProfile?.ai_tone === "bro" && "Bro"}
+          </div>
+        </div>
+      </div>
+
+      {/* Sidebar drawer for mobile when toggled (uses showSettings as sidebar open flag) */}
+      {showSettings && (
+        <div className="md:hidden fixed inset-0 z-40 flex">
+          <div className="w-64 border-r border-sidebar-border bg-sidebar-background">
+            <ChatSidebar
+              conversations={conversations}
+              activeConversationId={activeConversationId || undefined}
+              onNewChat={handleNewChat}
+              onSelectConversation={(id) => {
+                setActiveConversationId(id);
+                setShowSettings(false);
+              }}
+              onDeleteConversation={handleDeleteConversation}
+              onOpenSettings={() => setShowSettings(true)}
+              className="h-full"
+            />
+          </div>
+          <div className="flex-1 bg-black/40" onClick={() => setShowSettings(false)} />
+        </div>
+      )}
 
       {/* Main Chat Area */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 flex-col md:ml-0">
         {/* Header */}
-        <div className="border-b border-border bg-card px-6 py-4">
+        <div className="border-b border-border bg-card px-6 py-4 md:pl-6 md:pr-6 pt-16 md:pt-4">
           <div className="mx-auto max-w-3xl">
             <h2 className="text-lg font-semibold text-foreground">
               {activeConversation?.title || "CHADGPT"}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {userProfile?.tone === "tough" && "Tough Coach Mode"}
-              {userProfile?.tone === "stoic" && "Stoic Mentor Mode"}
-              {userProfile?.tone === "bro" && "Big Bro Mode"}
+              {userProfile?.ai_tone === "tough" && "Tough Coach Mode"}
+              {userProfile?.ai_tone === "stoic" && "Stoic Mentor Mode"}
+              {userProfile?.ai_tone === "bro" && "Big Bro Mode"}
               {" · "}
-              Intensity: {userProfile?.intensity}%
+              Intensity: {userProfile?.ai_intensity}%
             </p>
           </div>
         </div>
 
         {/* Messages */}
         <ScrollArea className="flex-1 px-4">
-          <div className="mx-auto max-w-3xl py-8">
+          <div className="mx-auto w-full max-w-3xl py-8">
             {activeConversation?.messages.length === 0 ? (
               <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
                 <div className="mb-6 inline-flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary/80 animate-glow">
@@ -291,7 +437,7 @@ const Index = () => {
                     timestamp={message.timestamp}
                   />
                 ))}
-                {isLoading && (
+                {chatLoading && (
                   <ChatMessage
                     role="assistant"
                     content="..."
@@ -308,7 +454,7 @@ const Index = () => {
           <div className="mx-auto max-w-3xl">
             <ChatInput
               onSend={handleSendMessage}
-              disabled={isLoading}
+              disabled={chatLoading}
               placeholder="What's your excuse today?"
             />
           </div>
@@ -319,7 +465,6 @@ const Index = () => {
       {showSettings && userProfile && (
         <SettingsPanel
           profile={userProfile}
-          webhookUrl={webhookUrl}
           onUpdateProfile={(profile) => {
             setUserProfile(profile);
             localStorage.setItem("chadgpt-profile", JSON.stringify(profile));
@@ -327,10 +472,6 @@ const Index = () => {
               title: "Settings updated",
               description: "Your preferences have been saved.",
             });
-          }}
-          onUpdateWebhook={(url) => {
-            setWebhookUrl(url);
-            localStorage.setItem("chadgpt-webhook", url);
           }}
           onClose={() => setShowSettings(false)}
         />

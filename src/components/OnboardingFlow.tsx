@@ -7,10 +7,11 @@ import { Slider } from "@/components/ui/slider";
 import { Card } from "@/components/ui/card";
 
 export type UserProfile = {
-  goals: string;
-  tone: "tough" | "stoic" | "bro";
-  intensity: number;
-  focusArea: string;
+  username?: string;
+  ai_goal: string;
+  ai_tone: "tough" | "stoic" | "bro";
+  ai_intensity: number;
+  updated_at?: string;
 };
 
 interface OnboardingFlowProps {
@@ -20,10 +21,10 @@ interface OnboardingFlowProps {
 export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   const [step, setStep] = useState(1);
   const [profile, setProfile] = useState<UserProfile>({
-    goals: "",
-    tone: "tough",
-    intensity: 70,
-    focusArea: "productivity",
+    username: "",
+    ai_goal: "",
+    ai_tone: "tough",
+    ai_intensity: 70,
   });
 
   const handleNext = () => {
@@ -34,9 +35,21 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     }
   };
 
+  const handleBack = () => {
+    if (step > 1) {
+      setStep(step - 1);
+    }
+  };
+
   const canProceed = () => {
-    if (step === 1) return profile.goals.trim().length > 0;
-    return true;
+    switch (step) {
+      case 1:
+        return profile.username?.trim().length ?? 0 > 0;
+      case 2:
+        return profile.ai_goal.trim().length > 0;
+      default:
+        return true;
+    }
   };
 
   return (
@@ -78,18 +91,18 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
             <div className="space-y-4">
               <div>
                 <h2 className="mb-4 text-xl font-semibold text-foreground">
-                  What are your goals?
+                  What should I call you?
                 </h2>
                 <p className="mb-6 text-sm text-muted-foreground">
-                  Be specific. Fitness? Career? Studies? Habits?
+                  Enter your name or what you'd like to be called
                 </p>
-                <Textarea
-                  placeholder="E.g., Get in shape, build my business, stop procrastinating..."
-                  value={profile.goals}
+                <Input
+                  placeholder="Enter your name..."
+                  value={profile.username || ""}
                   onChange={(e) =>
-                    setProfile({ ...profile, goals: e.target.value })
+                    setProfile({ ...profile, username: e.target.value })
                   }
-                  className="min-h-[150px]"
+                  className="w-full"
                 />
               </div>
             </div>
@@ -99,17 +112,38 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
             <div className="space-y-4">
               <div>
                 <h2 className="mb-4 text-xl font-semibold text-foreground">
+                  What are your goals?
+                </h2>
+                <p className="mb-6 text-sm text-muted-foreground">
+                  Be specific. Fitness? Career? Studies? Habits?
+                </p>
+                <Textarea
+                  placeholder="E.g., Get in shape, build my business, stop procrastinating..."
+                  value={profile.ai_goal}
+                  onChange={(e) =>
+                    setProfile({ ...profile, ai_goal: e.target.value })
+                  }
+                  className="min-h-[150px]"
+                />
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="space-y-4">
+              <div>
+                <h2 className="mb-4 text-xl font-semibold text-foreground">
                   Choose your motivation tone
                 </h2>
                 <p className="mb-6 text-sm text-muted-foreground">
-                  How should I push you?
+                  How should I push you, {profile.username}?
                 </p>
                 <RadioGroup
-                  value={profile.tone}
+                  value={profile.ai_tone}
                   onValueChange={(value) =>
                     setProfile({
                       ...profile,
-                      tone: value as "tough" | "stoic" | "bro",
+                      ai_tone: value as "tough" | "stoic" | "bro",
                     })
                   }
                   className="space-y-4"
@@ -157,20 +191,20 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
             </div>
           )}
 
-          {step === 3 && (
-            <div className="space-y-6">
+          {step === 4 && (
+            <div className="space-y-4">
               <div>
                 <h2 className="mb-4 text-xl font-semibold text-foreground">
                   Set your intensity level
                 </h2>
                 <p className="mb-6 text-sm text-muted-foreground">
-                  How hard should I push?
+                  How hard should I push you, {profile.username}?
                 </p>
                 <div className="space-y-4">
                   <Slider
-                    value={[profile.intensity]}
+                    value={[profile.ai_intensity]}
                     onValueChange={([value]) =>
-                      setProfile({ ...profile, intensity: value })
+                      setProfile({ ...profile, ai_intensity: value })
                     }
                     min={0}
                     max={100}
@@ -180,7 +214,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Gentle</span>
                     <span className="font-semibold text-primary">
-                      {profile.intensity}%
+                      {profile.ai_intensity}%
                     </span>
                     <span className="text-muted-foreground">Savage</span>
                   </div>
@@ -189,38 +223,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
             </div>
           )}
 
-          {step === 4 && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="mb-4 text-xl font-semibold text-foreground">
-                  Main focus area
-                </h2>
-                <p className="mb-6 text-sm text-muted-foreground">
-                  What should I help you conquer first?
-                </p>
-                <RadioGroup
-                  value={profile.focusArea}
-                  onValueChange={(value) =>
-                    setProfile({ ...profile, focusArea: value })
-                  }
-                  className="space-y-3"
-                >
-                  {["Fitness", "Career", "Productivity", "Mindset", "Habits"].map(
-                    (area) => (
-                      <Label
-                        key={area}
-                        htmlFor={area.toLowerCase()}
-                        className="flex cursor-pointer items-center space-x-3 rounded-lg border border-border bg-secondary/30 p-4 hover:bg-secondary/50 transition-colors"
-                      >
-                        <RadioGroupItem value={area.toLowerCase()} id={area.toLowerCase()} />
-                        <span className="font-medium text-foreground">{area}</span>
-                      </Label>
-                    )
-                  )}
-                </RadioGroup>
-              </div>
-            </div>
-          )}
+
         </div>
 
         {/* Navigation */}
@@ -239,7 +242,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
             disabled={!canProceed()}
             className="flex-1"
           >
-            {step === 4 ? "Get Started" : "Continue"}
+            {step === 3 ? "Get Started" : "Continue"}
           </Button>
         </div>
       </Card>

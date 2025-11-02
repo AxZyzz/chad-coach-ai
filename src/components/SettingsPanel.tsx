@@ -5,20 +5,17 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { UserProfile } from "./OnboardingFlow";
+import { supabase } from "@/lib/supabase";
 
 interface SettingsPanelProps {
   profile: UserProfile;
-  webhookUrl: string;
   onUpdateProfile: (profile: UserProfile) => void;
-  onUpdateWebhook: (url: string) => void;
   onClose: () => void;
 }
 
 export const SettingsPanel = ({
   profile,
-  webhookUrl,
   onUpdateProfile,
-  onUpdateWebhook,
   onClose,
 }: SettingsPanelProps) => {
   return (
@@ -27,40 +24,33 @@ export const SettingsPanel = ({
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">
           <h2 className="text-2xl font-bold text-foreground">Settings</h2>
-          <Button variant="ghost" size="icon" onClick={onClose}>
-            <X className="h-5 w-5" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="destructive" 
+              onClick={async () => {
+                await supabase.auth.signOut();
+                window.location.reload();
+              }}
+            >
+              Logout
+            </Button>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
         </div>
 
         {/* Settings Content */}
         <div className="space-y-8">
-          {/* Webhook URL */}
-          <div className="space-y-3">
-            <Label htmlFor="webhook" className="text-foreground">
-              n8n Webhook URL
-            </Label>
-            <Input
-              id="webhook"
-              type="url"
-              value={webhookUrl}
-              onChange={(e) => onUpdateWebhook(e.target.value)}
-              placeholder="https://your-n8n-instance.com/webhook/..."
-              className="font-mono text-sm"
-            />
-            <p className="text-xs text-muted-foreground">
-              All conversations will be sent to this webhook
-            </p>
-          </div>
-
           {/* Tone Selection */}
           <div className="space-y-3">
             <Label className="text-foreground">Motivation Tone</Label>
             <RadioGroup
-              value={profile.tone}
+              value={profile.ai_tone}
               onValueChange={(value) =>
                 onUpdateProfile({
                   ...profile,
-                  tone: value as "tough" | "stoic" | "bro",
+                  ai_tone: value as "tough" | "stoic" | "bro",
                 })
               }
               className="space-y-3"
@@ -96,9 +86,9 @@ export const SettingsPanel = ({
             <Label className="text-foreground">Intensity Level</Label>
             <div className="space-y-4">
               <Slider
-                value={[profile.intensity]}
-                onValueChange={([value]) =>
-                  onUpdateProfile({ ...profile, intensity: value })
+                value={[profile.ai_intensity]}
+                onValueChange={(value) => 
+                  onUpdateProfile({ ...profile, ai_intensity: value[0] })
                 }
                 min={0}
                 max={100}
@@ -108,7 +98,7 @@ export const SettingsPanel = ({
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Gentle</span>
                 <span className="font-semibold text-primary">
-                  {profile.intensity}%
+                  {profile.ai_intensity}%
                 </span>
                 <span className="text-muted-foreground">Savage</span>
               </div>
